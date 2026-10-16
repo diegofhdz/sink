@@ -30,6 +30,16 @@ pub trait AudioBackend: Send + Sync {
         Ok(())
     }
 
+    /// Rank the devices priority channels choose from, highest first.
+    fn set_output_priority(&self, _order: &[String]) -> Result<(), SinkError> {
+        Ok(())
+    }
+
+    /// Route a channel to the highest-ranked live device of the priority
+    /// list, switching back whenever a better one returns; with none live it
+    /// fails over like a pinned channel. `set_channel_output` leaves the list.
+    fn follow_output_priority(&self, sink_name: &str) -> Result<(), SinkError>;
+
     /// Apply a channel's parametric EQ (insert/re-tune/remove the biquad
     /// chain). Native-only: the pactl fallback has no in-graph insert point.
     fn set_channel_eq(&self, sink_name: &str, config: &EqConfig) -> Result<(), SinkError>;

@@ -78,6 +78,8 @@ impl AppState {
             assignments: crate::persistence::assignments::Assignments::load(),
             aliases: crate::persistence::aliases::Aliases::load(),
             outputs: crate::persistence::outputs::ChannelOutputs::load(),
+            output_priority: crate::persistence::output_priority::OutputPriority::load(),
+            output_priority_saved_at: now,
             eq: crate::persistence::eq::ChannelEq::load(),
             mic: crate::persistence::mic::load(),
             channel_defs,

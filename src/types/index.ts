@@ -42,6 +42,21 @@ export interface OutputDevice {
   description: string;
 }
 
+/** Mirrors Rust output_priority::KnownOutput: a device Sink has seen. */
+export interface KnownOutput {
+  name: string;
+  description: string;
+  /** Unix seconds of the last sighting. */
+  last_seen: number;
+}
+
+/** Mirrors Rust output_priority::OutputPriority. */
+export interface OutputPriority {
+  /** Device node names, highest priority first. */
+  order: string[];
+  known: KnownOutput[];
+}
+
 /** Mirrors Rust NoiseSuppression. */
 export type NoiseSuppression = "off" | "light" | "strong";
 

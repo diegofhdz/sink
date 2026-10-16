@@ -6,6 +6,7 @@ import { useTheme, THEMES } from "../../store/theme";
 import type { OutputDevice } from "../../types";
 import { Ms } from "../Icons";
 import { HotkeysSection } from "./HotkeysSection";
+import { OutputPrioritySection } from "./OutputPrioritySection";
 import { ConfirmModal } from "../ConfirmModal";
 import { MenuItem } from "../MenuItem";
 import { Popover } from "../Popover";
@@ -290,6 +291,8 @@ export function SettingsScreen() {
             </div>
           )}
         </div>
+
+        <OutputPrioritySection />
 
         <HotkeysSection onError={setError} />
 

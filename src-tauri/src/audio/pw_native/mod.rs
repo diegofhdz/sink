@@ -164,6 +164,16 @@ impl AudioBackend for PipeWireBackend {
         })
     }
 
+    fn set_output_priority(&self, order: &[String]) -> Result<(), SinkError> {
+        let order = order.to_vec();
+        self.request(|reply| Cmd::SetOutputPriority { order, reply })
+    }
+
+    fn follow_output_priority(&self, sink_name: &str) -> Result<(), SinkError> {
+        let sink_name = sink_name.to_string();
+        self.request(|reply| Cmd::FollowOutputPriority { sink_name, reply })
+    }
+
     fn create_bus(
         &self,
         name: &str,

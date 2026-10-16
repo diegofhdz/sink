@@ -7,6 +7,7 @@ import type {
   MicConfig,
   MixRole,
   OutputDevice,
+  OutputPriority,
   ProfileInfo,
   SeenApp,
   VirtualSink,
@@ -55,9 +56,17 @@ interface MixerStore {
    * is gone. Defaults to on (absent treated as true).
    */
   channelFailover: Record<string, boolean>;
+  /** Channel -> whether it routes by the priority list (absent = false). */
+  channelPriority: Record<string, boolean>;
+  /** The global device ranking, and every output device Sink remembers. */
+  outputPriority: OutputPriority;
   fetchOutputs: () => Promise<void>;
+  /** Pin a device (or null for the default); takes the channel off the list. */
   setChannelOutput: (sinkName: string, outputName: string | null) => Promise<void>;
   setChannelFailover: (sinkName: string, enabled: boolean) => Promise<void>;
+  followOutputPriority: (sinkName: string) => Promise<void>;
+  setOutputPriority: (order: string[]) => Promise<void>;
+  forgetOutputDevice: (name: string) => Promise<void>;
   /** Sonar-style "same device on all channels". */
   setAllOutputs: (outputName: string | null) => Promise<void>;
   /** Channel -> parametric EQ (absent = never configured, i.e. default). */
@@ -189,6 +198,8 @@ export const useMixerStore = create<MixerStore>((set, get) => ({
   channelOutputs: {},
   resolvedOutputs: {},
   channelFailover: {},
+  channelPriority: {},
+  outputPriority: { order: [], known: [] },
   micConfig: null,
   inputDevices: [],
   seenApps: [],
@@ -372,11 +383,20 @@ export const useMixerStore = create<MixerStore>((set, get) => ({
 
   fetchOutputs: async () => {
     try {
-      const [outputDevices, channelOutputs, resolvedOutputs, channelFailover] = await Promise.all([
+      const [
+        outputDevices,
+        channelOutputs,
+        resolvedOutputs,
+        channelFailover,
+        channelPriority,
+        outputPriority,
+      ] = await Promise.all([
         invoke<OutputDevice[]>("get_output_devices"),
         invoke<Record<string, string | null>>("get_channel_outputs"),
         invoke<Record<string, string | null>>("get_resolved_outputs"),
         invoke<Record<string, boolean>>("get_channel_failover"),
+        invoke<Record<string, boolean>>("get_channel_priority"),
+        invoke<OutputPriority>("get_output_priority"),
       ]);
       const s = get();
       const patch: Partial<MixerStore> = {};
@@ -384,6 +404,8 @@ export const useMixerStore = create<MixerStore>((set, get) => ({
       if (!jsonEqual(s.channelOutputs, channelOutputs)) patch.channelOutputs = channelOutputs;
       if (!jsonEqual(s.resolvedOutputs, resolvedOutputs)) patch.resolvedOutputs = resolvedOutputs;
       if (!jsonEqual(s.channelFailover, channelFailover)) patch.channelFailover = channelFailover;
+      if (!jsonEqual(s.channelPriority, channelPriority)) patch.channelPriority = channelPriority;
+      if (!jsonEqual(s.outputPriority, outputPriority)) patch.outputPriority = outputPriority;
       if (Object.keys(patch).length) set(patch);
     } catch (e) {
       set({ error: String(e) });
@@ -393,6 +415,7 @@ export const useMixerStore = create<MixerStore>((set, get) => ({
   setChannelOutput: async (sinkName, outputName) => {
     set((s) => ({
       channelOutputs: { ...s.channelOutputs, [sinkName]: outputName },
+      channelPriority: { ...s.channelPriority, [sinkName]: false },
     }));
     try {
       await invoke("set_channel_output", { sinkName, outputName: outputName ?? "" });
@@ -411,6 +434,37 @@ export const useMixerStore = create<MixerStore>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
       await get().fetchOutputs();
+    }
+  },
+
+  followOutputPriority: async (sinkName) => {
+    set((s) => ({
+      channelOutputs: { ...s.channelOutputs, [sinkName]: null },
+      channelPriority: { ...s.channelPriority, [sinkName]: true },
+    }));
+    try {
+      await invoke("follow_output_priority", { sinkName });
+    } catch (e) {
+      set({ error: String(e) });
+      await get().fetchOutputs();
+    }
+  },
+
+  setOutputPriority: async (order) => {
+    set((s) => ({ outputPriority: { ...s.outputPriority, order } }));
+    try {
+      set({ outputPriority: await invoke<OutputPriority>("set_output_priority", { order }) });
+    } catch (e) {
+      set({ error: String(e) });
+      await get().fetchOutputs();
+    }
+  },
+
+  forgetOutputDevice: async (name) => {
+    try {
+      set({ outputPriority: await invoke<OutputPriority>("forget_output_device", { name }) });
+    } catch (e) {
+      set({ error: String(e) });
     }
   },
 

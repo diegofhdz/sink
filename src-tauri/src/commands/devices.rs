@@ -5,8 +5,11 @@ use tauri::State;
 use crate::audio::identity::{self, Identity};
 use crate::audio::types::{AppStream, OutputDevice, VirtualSink};
 use crate::audio::{icons, steam};
+use crate::error::SinkError;
 use crate::mixer::state::MixerState;
 use crate::persistence::assignments::identity_key;
+use crate::persistence::output_priority::OutputPriority;
+use crate::persistence::outputs::ChannelOutputs;
 use crate::state::AppState;
 
 /// How often the poll force-saves app history to refresh `last_seen` on disk.
@@ -277,12 +280,31 @@ fn adopt_legacy(mixer: &mut MixerState, streams: &[AppStream]) -> (bool, bool) {
 }
 
 /// Physical output devices (everything that isn't one of our virtual sinks).
+/// Each call is also a sighting, so the priority list remembers them.
 #[tauri::command]
 pub fn get_output_devices(state: State<'_, AppState>) -> Result<Vec<OutputDevice>, String> {
-    state
+    let devices = state
         .backend
         .list_output_devices()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let to_save = {
+        let mut mixer = state.lock_mixer()?;
+        let now = crate::persistence::unix_now();
+        let changed = mixer.output_priority.record(&devices, now);
+        // Same cadence as app history: a bare last_seen bump can wait.
+        (changed || now.saturating_sub(mixer.output_priority_saved_at) >= SEEN_FLUSH_SECS).then(
+            || {
+                mixer.output_priority_saved_at = now;
+                mixer.output_priority.clone()
+            },
+        )
+    };
+    if let Some(priority) = to_save {
+        if let Err(e) = priority.save() {
+            eprintln!("sink: saving known output devices failed: {e}");
+        }
+    }
+    Ok(devices)
 }
 
 /// Create the user's virtual sinks and reset them to 100%, unmuted.
@@ -314,7 +336,7 @@ pub fn init_virtual_devices(
             .map_err(|e| e.to_string())?;
     }
 
-    let (outputs, eq, mic, buses) = {
+    let (outputs, priority_order, eq, mic, buses) = {
         let mut mixer = state.lock_mixer()?;
         mixer.init_defaults();
         // The master mix always carries the full channel set.
@@ -322,6 +344,7 @@ pub fn init_virtual_devices(
         mixer.buses.sync_master(&names);
         (
             mixer.outputs.clone(),
+            mixer.output_priority.order.clone(),
             mixer.eq.clone(),
             mixer.mic.clone(),
             mixer.buses.clone(),
@@ -331,13 +354,15 @@ pub fn init_virtual_devices(
         eprintln!("sink: saving mixes failed: {e}");
     }
 
+    // The ranking goes first, so a priority channel never routes without it.
+    if let Err(e) = state.backend.set_output_priority(&priority_order) {
+        eprintln!("sink: output priority restore failed: {e}");
+    }
+
     // Wire every channel to its saved output (or the system default) so
     // channels are audible from the start.
     for def in &defs.channels {
-        if let Err(e) = state
-            .backend
-            .set_channel_output(&def.name, outputs.get(&def.name))
-        {
+        if let Err(e) = apply_channel_output(state.inner(), &def.name, &outputs) {
             eprintln!("sink: output routing for {} failed: {e}", def.name);
         }
         // Restore per-channel failover (default on, so only push the ones off).
@@ -516,6 +541,101 @@ pub fn set_channel_failover(
         mixer.outputs.clone()
     };
     outputs.save().map_err(|e| e.to_string())
+}
+
+/// Push one channel's saved routing to the backend: the priority list, or
+/// its pin / the default. One call either way, so a restore never relinks
+/// through the other mode first.
+pub fn apply_channel_output(
+    state: &AppState,
+    sink_name: &str,
+    outputs: &ChannelOutputs,
+) -> Result<(), SinkError> {
+    if outputs.follows_priority(sink_name) {
+        state.backend.follow_output_priority(sink_name)
+    } else {
+        state
+            .backend
+            .set_channel_output(sink_name, outputs.get(sink_name))
+    }
+}
+
+/// Which channels route by the priority list.
+#[tauri::command]
+pub fn get_channel_priority(state: State<'_, AppState>) -> Result<HashMap<String, bool>, String> {
+    let mixer = state.lock_mixer()?;
+    Ok(mixer
+        .channel_defs
+        .channels
+        .iter()
+        .map(|def| (def.name.clone(), mixer.outputs.follows_priority(&def.name)))
+        .collect())
+}
+
+/// Route a channel by the priority list. Picking a device or the default
+/// with `set_channel_output` takes it off the list again.
+#[tauri::command]
+pub fn follow_output_priority(state: State<'_, AppState>, sink_name: String) -> Result<(), String> {
+    state
+        .backend
+        .follow_output_priority(&sink_name)
+        .map_err(|e| e.to_string())?;
+
+    let outputs = {
+        let mut mixer = state.lock_mixer()?;
+        mixer.outputs.follow_priority(&sink_name);
+        crate::commands::profiles::autosave_active(&mixer);
+        mixer.outputs.clone()
+    };
+    outputs.save().map_err(|e| e.to_string())
+}
+
+/// The device ranking and every output device Sink remembers.
+#[tauri::command]
+pub fn get_output_priority(state: State<'_, AppState>) -> Result<OutputPriority, String> {
+    Ok(state.lock_mixer()?.output_priority.clone())
+}
+
+/// Replace the device ranking (highest first). Returns what was stored,
+/// after blanks and repeats are dropped.
+#[tauri::command]
+pub fn set_output_priority(
+    state: State<'_, AppState>,
+    order: Vec<String>,
+) -> Result<OutputPriority, String> {
+    let priority = {
+        let mut mixer = state.lock_mixer()?;
+        mixer.output_priority.set_order(order);
+        mixer.output_priority.clone()
+    };
+    state
+        .backend
+        .set_output_priority(&priority.order)
+        .map_err(|e| e.to_string())?;
+    priority.save().map_err(|e| e.to_string())?;
+    Ok(priority)
+}
+
+/// Forget a remembered device, taking it out of the ranking too. A device
+/// that is still plugged in is remembered again on its next sighting.
+#[tauri::command]
+pub fn forget_output_device(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<OutputPriority, String> {
+    let (priority, reranked) = {
+        let mut mixer = state.lock_mixer()?;
+        let reranked = mixer.output_priority.forget(&name);
+        (mixer.output_priority.clone(), reranked)
+    };
+    if reranked {
+        state
+            .backend
+            .set_output_priority(&priority.order)
+            .map_err(|e| e.to_string())?;
+    }
+    priority.save().map_err(|e| e.to_string())?;
+    Ok(priority)
 }
 
 /// Destroy all virtual sinks. Called before the app exits.

@@ -15,6 +15,10 @@ pub struct ChannelOutputs {
     /// stay silent when it's gone; `serde(default)` keeps old configs loading.
     #[serde(default)]
     pub no_failover: HashSet<String>,
+    /// Channels that play on the highest-ranked live device of the global
+    /// output priority list instead of one device or the default.
+    #[serde(default)]
+    pub priority: HashSet<String>,
 }
 
 impl ChannelOutputs {
@@ -48,8 +52,22 @@ impl ChannelOutputs {
         Ok(())
     }
 
+    /// Pin a device (or follow the default); either way the channel leaves
+    /// the priority list.
     pub fn set(&mut self, sink_name: &str, output: Option<String>) {
+        self.priority.remove(sink_name);
         self.outputs.insert(sink_name.to_string(), output);
+    }
+
+    /// Route the channel by the priority list. Its pin is dropped, so a
+    /// backend without priority support follows the default instead.
+    pub fn follow_priority(&mut self, sink_name: &str) {
+        self.outputs.insert(sink_name.to_string(), None);
+        self.priority.insert(sink_name.to_string());
+    }
+
+    pub fn follows_priority(&self, sink_name: &str) -> bool {
+        self.priority.contains(sink_name)
     }
 
     pub fn get(&self, sink_name: &str) -> Option<&str> {
@@ -74,6 +92,7 @@ impl ChannelOutputs {
     pub fn remove(&mut self, sink_name: &str) {
         self.outputs.remove(sink_name);
         self.no_failover.remove(sink_name);
+        self.priority.remove(sink_name);
     }
 }
 
@@ -125,5 +144,27 @@ mod tests {
         o.remove("sink_game");
         assert_eq!(o.get("sink_game"), None);
         assert!(o.failover("sink_game"));
+    }
+
+    #[test]
+    fn priority_and_a_pin_are_exclusive() {
+        let mut o = ChannelOutputs::default();
+        o.set("sink_game", Some("dev".into()));
+        o.follow_priority("sink_game");
+        assert!(o.follows_priority("sink_game"));
+        assert_eq!(o.get("sink_game"), None, "the pin is dropped");
+        o.set("sink_game", None);
+        assert!(!o.follows_priority("sink_game"), "default leaves the list");
+        o.follow_priority("sink_game");
+        o.remove("sink_game");
+        assert!(!o.follows_priority("sink_game"));
+    }
+
+    #[test]
+    fn old_config_without_priority_field_loads() {
+        let legacy = r#"{"outputs":{"sink_game":"dev"},"no_failover":[]}"#;
+        let o: ChannelOutputs = serde_json::from_str(legacy).expect("legacy loads");
+        assert!(!o.follows_priority("sink_game"));
+        assert_eq!(o.get("sink_game"), Some("dev"));
     }
 }

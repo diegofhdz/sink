@@ -20,6 +20,11 @@ pub struct MixerState {
     pub aliases: Aliases,
     /// Per-channel output device choices (persisted to disk).
     pub outputs: crate::persistence::outputs::ChannelOutputs,
+    /// The global device ranking and every output device seen (persisted).
+    pub output_priority: crate::persistence::output_priority::OutputPriority,
+    /// Unix seconds of the last `output_priority` write, which throttles
+    /// saves that only refresh `last_seen`.
+    pub output_priority_saved_at: u64,
     /// Per-channel parametric EQ configs (persisted to disk).
     pub eq: crate::persistence::eq::ChannelEq,
     /// Mic chain configuration (persisted to disk).

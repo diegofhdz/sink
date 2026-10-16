@@ -138,10 +138,10 @@ pub fn load_profile_on(state: &AppState, name: String) -> Result<(), String> {
             .backend
             .set_sink_mute(&channel.name, channel.muted)
             .map_err(|e| e.to_string())?;
-        // Output: profile's choice, or follow-default when unset.
-        if let Err(e) = state
-            .backend
-            .set_channel_output(&channel.name, profile.outputs.get(&channel.name))
+        // Output: profile's choice (a device or the priority list), or
+        // follow-default when unset.
+        if let Err(e) =
+            crate::commands::devices::apply_channel_output(state, &channel.name, &profile.outputs)
         {
             eprintln!("sink: profile output for {} failed: {e}", channel.name);
         }

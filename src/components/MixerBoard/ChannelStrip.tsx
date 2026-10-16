@@ -38,8 +38,10 @@ export function ChannelStrip({
   const output = useMixerStore((s) => s.channelOutputs[channel.name] ?? null);
   const resolvedOutput = useMixerStore((s) => s.resolvedOutputs[channel.name] ?? null);
   const failover = useMixerStore((s) => s.channelFailover[channel.name] ?? true);
+  const priority = useMixerStore((s) => s.channelPriority[channel.name] ?? false);
   const setChannelOutput = useMixerStore((s) => s.setChannelOutput);
   const setChannelFailover = useMixerStore((s) => s.setChannelFailover);
+  const followOutputPriority = useMixerStore((s) => s.followOutputPriority);
   const renameChannel = useMixerStore((s) => s.renameChannel);
   const removeChannel = useMixerStore((s) => s.removeChannel);
   const setChannelIcon = useMixerStore((s) => s.setChannelIcon);
@@ -194,6 +196,8 @@ export function ChannelStrip({
         compact
         value={output}
         resolved={resolvedOutput}
+        priority={priority}
+        onPriority={() => void followOutputPriority(channel.name)}
         failover={failover}
         onFailoverChange={(enabled) => void setChannelFailover(channel.name, enabled)}
         onChange={(o) => void setChannelOutput(channel.name, o)}

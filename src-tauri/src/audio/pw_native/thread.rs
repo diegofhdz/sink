@@ -97,6 +97,16 @@ pub enum Cmd {
         enabled: bool,
         reply: Reply<()>,
     },
+    /// Replace the ranked device list priority channels pick from.
+    SetOutputPriority {
+        order: Vec<String>,
+        reply: Reply<()>,
+    },
+    /// Route a channel by the priority list (`SetChannelOutput` leaves it).
+    FollowOutputPriority {
+        sink_name: String,
+        reply: Reply<()>,
+    },
     /// Create a mix bus (capturable virtual source).
     CreateBus {
         name: String,
@@ -238,6 +248,11 @@ struct State {
     /// Channels with auto-failover off: route only to their chosen device and
     /// stay silent when it's gone. Absence means failover is on.
     channel_strict: std::collections::HashSet<String>,
+    /// Channels routed by `output_priority`; their `channel_outputs` entry
+    /// is None and unused.
+    channel_priority: std::collections::HashSet<String>,
+    /// Device node.names, highest priority first.
+    output_priority: Vec<String>,
     mic_config: MicConfig,
     /// Proxy for the sink_mic virtual source (kept alive while enabled).
     mic_source: Option<Node>,
@@ -1126,6 +1141,15 @@ fn fallback_sink(s: &State) -> Option<u32> {
     )
 }
 
+/// The highest-ranked device that is live right now. Runs on every relink,
+/// so a returning device wins its channels back the moment it reappears.
+fn pick_priority(order: &[String], live: impl Fn(&str) -> bool) -> Option<&str> {
+    order
+        .iter()
+        .map(String::as_str)
+        .find(|name| !is_own_sink(name) && live(name))
+}
+
 /// Which device a channel routes to: explicit pin wins, then default, then the
 /// best available sink; strict + gone device = silence.
 fn resolve_target(
@@ -1351,8 +1375,17 @@ fn ensure_all_links(state: &Rc<RefCell<State>>) {
         let source_id = resolve_source(s.eq_playback_node(sink_name), channel_id);
 
         // ---- output device links ----
-        let explicit = s.channel_outputs.get(sink_name).cloned().flatten();
-        let pinned = explicit.is_some();
+        // A priority channel is pinned to its best live device, and to the
+        // list as a whole, so it fails over (or goes silent) like a pin
+        // once every ranked device is gone.
+        let (explicit, pinned) = if s.channel_priority.contains(sink_name) {
+            let best = pick_priority(&s.output_priority, |name| node_ids.contains_key(name));
+            (best.map(str::to_string), !s.output_priority.is_empty())
+        } else {
+            let explicit = s.channel_outputs.get(sink_name).cloned().flatten();
+            let pinned = explicit.is_some();
+            (explicit, pinned)
+        };
         let explicit_id = explicit
             .as_deref()
             .and_then(|name| node_ids.get(name).copied());
@@ -1643,6 +1676,7 @@ fn handle_cmd(state: &Rc<RefCell<State>>, registry: &RegistryRc, cmd: Cmd) {
             s.bus_member_gains.retain(|(_, ch), _| ch != &name);
             s.send_gain_failed.retain(|(_, ch)| ch != &name);
             s.channel_outputs.remove(&name);
+            s.channel_priority.remove(&name);
             if let Some(levels) = &s.levels {
                 levels.release(&name);
             }
@@ -2171,10 +2205,31 @@ fn handle_cmd(state: &Rc<RefCell<State>>, registry: &RegistryRc, cmd: Cmd) {
                 let _ = reply.send(Err(SinkError::UnknownSink(sink_name)));
                 return;
             }
-            state
-                .borrow_mut()
-                .channel_outputs
-                .insert(sink_name, output_name);
+            {
+                let mut s = state.borrow_mut();
+                // In the same pass, so leaving the list never relinks via
+                // the old resolution first.
+                s.channel_priority.remove(&sink_name);
+                s.channel_outputs.insert(sink_name, output_name);
+            }
+            ensure_all_links(state);
+            let _ = reply.send(Ok(()));
+        }
+        Cmd::SetOutputPriority { order, reply } => {
+            state.borrow_mut().output_priority = order;
+            ensure_all_links(state);
+            let _ = reply.send(Ok(()));
+        }
+        Cmd::FollowOutputPriority { sink_name, reply } => {
+            if !is_virtual_sink(&sink_name) {
+                let _ = reply.send(Err(SinkError::UnknownSink(sink_name)));
+                return;
+            }
+            {
+                let mut s = state.borrow_mut();
+                s.channel_outputs.insert(sink_name.clone(), None);
+                s.channel_priority.insert(sink_name);
+            }
             ensure_all_links(state);
             let _ = reply.send(Ok(()));
         }
@@ -2471,6 +2526,38 @@ mod tests {
         assert_eq!(resolve_target(None, true, false, None, Some(2)), Some(2));
         // Pinned but gone, failover off -> silence, never another device.
         assert_eq!(resolve_target(None, true, true, Some(1), Some(2)), None);
+    }
+
+    #[test]
+    fn priority_picks_the_best_live_device_and_takes_it_back_on_return() {
+        let order: Vec<String> = ["usb.headset", "usb.dac", "analog"]
+            .map(String::from)
+            .to_vec();
+        let live = |names: &'static [&'static str]| move |n: &str| names.contains(&n);
+        assert_eq!(
+            pick_priority(&order, live(&["analog", "usb.dac", "usb.headset"])),
+            Some("usb.headset")
+        );
+        // Headset unplugged -> the next one down.
+        assert_eq!(
+            pick_priority(&order, live(&["analog", "usb.dac"])),
+            Some("usb.dac")
+        );
+        // Plugged back in -> it wins again, nothing sticky in between.
+        assert_eq!(
+            pick_priority(&order, live(&["analog", "usb.dac", "usb.headset"])),
+            Some("usb.headset")
+        );
+        // Unranked devices never count, and nothing ranked live is None.
+        assert_eq!(pick_priority(&order, live(&["hdmi"])), None);
+        assert_eq!(pick_priority(&[], live(&["analog"])), None);
+    }
+
+    #[test]
+    fn priority_never_picks_one_of_our_own_sinks() {
+        // A hand-edited list could name a channel; routing into it would loop.
+        let order: Vec<String> = ["sink_game", "analog"].map(String::from).to_vec();
+        assert_eq!(pick_priority(&order, |_| true), Some("analog"));
     }
 
     #[test]

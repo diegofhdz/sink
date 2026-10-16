@@ -451,6 +451,12 @@ impl AudioBackend for PactlBackend {
             .insert(sink_name.to_string(), module_index);
         Ok(())
     }
+
+    /// No device events to switch on here, so the channel follows the
+    /// default rather than keep whatever device it was pinned to.
+    fn follow_output_priority(&self, sink_name: &str) -> Result<(), SinkError> {
+        self.set_channel_output(sink_name, None)
+    }
 }
 
 #[cfg(test)]

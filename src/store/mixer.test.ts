@@ -179,3 +179,30 @@ describe("setChannelEq", () => {
     });
   });
 });
+
+describe("output priority", () => {
+  it("putting a channel on the list drops its pin, and picking a device takes it off", async () => {
+    useMixerStore.setState({ channelOutputs: { sink_game: "usb.headset" } });
+    const store = useMixerStore.getState();
+
+    await store.followOutputPriority("sink_game");
+    expect(useMixerStore.getState().channelOutputs.sink_game).toBeNull();
+    expect(useMixerStore.getState().channelPriority.sink_game).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("follow_output_priority", { sinkName: "sink_game" });
+
+    await store.setChannelOutput("sink_game", "analog");
+    expect(useMixerStore.getState().channelOutputs.sink_game).toBe("analog");
+    expect(useMixerStore.getState().channelPriority.sink_game).toBe(false);
+  });
+
+  it("reorders right away and keeps what the backend stored", async () => {
+    const stored = { order: ["b", "a"], known: [] };
+    invoke.mockResolvedValueOnce(stored);
+    const pending = useMixerStore.getState().setOutputPriority(["b", "a", "b"]);
+    // Optimistic, before the backend has deduped anything.
+    expect(useMixerStore.getState().outputPriority.order).toEqual(["b", "a", "b"]);
+    await pending;
+    expect(invoke).toHaveBeenCalledWith("set_output_priority", { order: ["b", "a", "b"] });
+    expect(useMixerStore.getState().outputPriority).toEqual(stored);
+  });
+});

@@ -27,6 +27,9 @@ Config is plain json, so nothing is hidden.
 
 - **Channels** - per-app routing with volume, mute, meters, and an output device per channel.
   Each one has a listen button, so you can hear just that channel.
+- **Output priority** - rank your output devices once in settings, then set a channel's output to "Priority list".
+  It plays on the highest ranked device that's connected, and moves back as soon as a higher one reconnects.
+  Sink remembers every output it has seen, so you can rank a headset that isn't plugged in right now.
 - **Apps** - running apps show up on their own, you assign them once and it's remembered.
   Apps that aren't running stay in a list with when they were last seen, and you can ignore the ones you don't care about.
 - **Mixes** - recordable sources for obs.

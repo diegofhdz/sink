@@ -14,6 +14,10 @@ interface OutputSelectProps {
    * resolves to right now. Shown so failover to another device is visible.
    */
   resolved?: string | null;
+  /** Routes by the global priority list (`value` is then null). */
+  priority?: boolean;
+  /** Put this channel on the priority list. Omit to hide the choice. */
+  onPriority?: () => void;
   /** Whether this channel fails over to another device (default true). */
   failover?: boolean;
   /** Toggle auto-failover for this channel. Omit to hide the toggle. */
@@ -37,6 +41,8 @@ function deviceIcon(description: string): string {
 export function OutputSelect({
   value,
   resolved,
+  priority,
+  onPriority,
   failover,
   onFailoverChange,
   mixed,
@@ -46,6 +52,8 @@ export function OutputSelect({
 }: Readonly<OutputSelectProps>) {
   const [open, setOpen] = useState(false);
   const outputDevices = useMixerStore((s) => s.outputDevices);
+  const ranked = useMixerStore((s) => s.outputPriority.order.length);
+  const onList = !mixed && !!priority;
 
   const current = value === null ? null : outputDevices.find((d) => d.name === value);
   // While following the default, the device it currently resolves to (so the
@@ -56,6 +64,8 @@ export function OutputSelect({
 
   let label: string;
   if (mixed) label = "Per-channel";
+  else if (onList)
+    label = resolvedDevice ? `Priority list (${resolvedDevice.description})` : "Priority list";
   else if (value !== null) label = current?.description ?? value;
   else if (resolvedDevice) label = `System default (${resolvedDevice.description})`;
   else label = "System default";
@@ -64,6 +74,7 @@ export function OutputSelect({
   // Following default shows the live device so the user sees where it lands.
   let shortLabel: string;
   if (mixed) shortLabel = "Mixed";
+  else if (onList) shortLabel = resolvedDevice?.description.split(" ")[0] ?? "Priority";
   else if (value !== null) shortLabel = label.split(" ")[0];
   else if (resolvedDevice) shortLabel = resolvedDevice.description.split(" ")[0];
   else shortLabel = "Default";
@@ -72,7 +83,7 @@ export function OutputSelect({
     <>
       <MenuItem
         icon="speaker_group"
-        selected={!mixed && value === null}
+        selected={!mixed && value === null && !onList}
         showCheck
         onClick={() => {
           onChange(null);
@@ -81,6 +92,24 @@ export function OutputSelect({
       >
         System default
       </MenuItem>
+      {onPriority && (
+        <MenuItem
+          icon="format_list_numbered"
+          selected={onList}
+          showCheck
+          title={
+            ranked
+              ? "The highest-ranked connected device, switching back when a better one returns"
+              : "Rank your devices under Settings › Output priority first"
+          }
+          onClick={() => {
+            onPriority();
+            setOpen(false);
+          }}
+        >
+          {ranked ? "Priority list" : "Priority list (empty)"}
+        </MenuItem>
+      )}
       {outputDevices.map((d) => (
         <MenuItem
           key={d.name}
@@ -100,7 +129,14 @@ export function OutputSelect({
           <div className="menu-sep" />
           {/* Static row: the Toggle is the control, so this must not be a
               button of its own. */}
-          <div className="menu-item static" title="Off: stays silent if this device disappears">
+          <div
+            className="menu-item static"
+            title={
+              onList
+                ? "Off: stays silent when no ranked device is connected"
+                : "Off: stays silent if this device disappears"
+            }
+          >
             <Ms name="sync_alt" />
             <span className="menu-item-label">Fail over to another device</span>
             <Toggle on={failover ?? true} onClick={() => onFailoverChange(!(failover ?? true))} />

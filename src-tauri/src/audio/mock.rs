@@ -177,6 +177,10 @@ impl AudioBackend for MockBackend {
         Ok(())
     }
 
+    fn follow_output_priority(&self, _sink_name: &str) -> Result<(), SinkError> {
+        Ok(())
+    }
+
     fn set_channel_eq(&self, _sink_name: &str, _config: &EqConfig) -> Result<(), SinkError> {
         Ok(())
     }

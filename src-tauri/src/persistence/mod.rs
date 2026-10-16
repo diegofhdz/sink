@@ -8,6 +8,7 @@ pub mod eq;
 pub mod eq_presets;
 pub mod hotkeys;
 pub mod mic;
+pub mod output_priority;
 pub mod outputs;
 pub mod prefs;
 pub mod profiles;
